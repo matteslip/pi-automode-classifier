@@ -61,6 +61,7 @@ export type Decider = "llm" | "classifier" | "command";
 type Scorer = Exclude<Decider, "llm">;
 
 export interface ClassifierConfig {
+  api: "systemone" | "decisions";
   // Local decision model server, used when `provider` is empty.
   endpoint: string;
   // Command (argv) run when the endpoint refuses connections, for example
@@ -146,6 +147,7 @@ export const DEFAULTS: Config = {
   // Of the question designs compared on bench/suites/bench-cases.jsonl, one yes/no question with both answers
   // described was the best or within 0.01 AUC of it on Kev-0.8B and Laya.
   classifier: {
+    api: "systemone",
     endpoint: "http://127.0.0.1:11438",
     startCommand: [],
     provider: "",
@@ -205,6 +207,7 @@ const SCHEMA: Schema = {
   withoutUi: { onAsk: oneOf("block", "allow"), rules: { allow: isStrings, deny: isStrings } },
   decider: (v) => isStrings(v) && (v as string[]).every((d) => ["llm", "classifier", "command"].includes(d)) && new Set(v as string[]).size === (v as string[]).length,
   classifier: {
+    api: oneOf("systemone", "decisions"),
     endpoint: (v) => typeof v === "string" && URL.canParse(v),
     startCommand: isStrings,
     provider: isString,
@@ -326,6 +329,8 @@ export function loadConfig(file = CONFIG_FILE): { config: Config; error?: string
   config.decider = (given.decider as Decider[] | undefined) ?? [config.command.argv.length ? "command" : given.classifier ? "classifier" : "llm"];
   const { decider } = config;
   if (decider.includes("llm") && decider.at(-1) !== "llm") return ignored('"llm" must be the last entry in "decider"');
+  if (config.classifier.api === "decisions" && (!config.classifier.provider.trim() || !config.classifier.model.trim()))
+    return ignored('classifier.api "decisions" requires classifier.provider and classifier.model');
   if (decider.includes("command") && !config.command.argv.length) return ignored('"decider" has "command" and command.argv is empty');
   for (const stage of ["classifier", "command"] as const) {
     if (config[stage].allowBelow > config[stage].askAbove) return ignored(`${stage}.allowBelow is above ${stage}.askAbove`);
@@ -607,7 +612,8 @@ async function askOnce(
   message: string,
   opts: { maxTokens: number; thinking: boolean; signal?: AbortSignal },
 ): Promise<{ text?: string; cut?: boolean; error?: string; tokens?: number }> {
-  const options: Record<string, unknown> = { maxTokens: opts.maxTokens, temperature: 0 };
+  const options: Record<string, unknown> = { maxTokens: opts.maxTokens };
+  if (resolved.model.provider !== "openai-codex") options.temperature = 0;
   if (opts.thinking && thinks(resolved)) options.reasoning = resolved.llm.thinkingLevel;
   const timeout = AbortSignal.timeout(resolved.llm.timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
@@ -871,9 +877,9 @@ export async function classify(config: Config, state: Record<string, string>, si
   if (stage === "command") return askClassifierProcess(config, state, signal);
   const started = performance.now();
   const ms = () => Math.round(performance.now() - started);
-  const { endpoint, provider, model: expected, timeoutMs } = config.classifier;
+  const { api, endpoint, provider, model: expected, timeoutMs } = config.classifier;
   const timedOut = { error: `no answer in ${timeoutMs} ms`, ms: 0 };
-  const model = provider ? registry?.findOfType("classifier", provider, expected) : undefined;
+  const model = provider && api !== "decisions" ? registry?.findOfType("classifier", provider, expected) : undefined;
 
   if (provider && !model) {
     // A chat provider with a System One server behind its baseUrl, such as LANCET under
@@ -882,7 +888,8 @@ export async function classify(config: Config, state: Record<string, string>, si
     const base = registry?.getProvider?.(provider)?.baseUrl;
     if (!registry || !base) return { error: `Pi has no classifier model ${provider}/${expected}`, ms: ms() };
     const key = await registry.getApiKeyForProvider?.(provider);
-    return systemOne(config, `${base.replace(/\/+$/, "")}/systemone`, key ? { Authorization: `Bearer ${key}` } : {}, state, signal, started);
+    if (api === "decisions" && !key) return { error: `Pi has no API key for ${provider}`, ms: ms() };
+    return systemOne(config, `${base.replace(/\/+$/, "")}/${api}`, key ? { Authorization: `Bearer ${key}` } : {}, state, signal, started);
   }
   if (provider) {
     const questions = buildQuestions(config);
@@ -911,6 +918,7 @@ async function systemOne(config: Config, url: string, headers: Record<string, st
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
+        ...(config.classifier.api === "decisions" ? { redirect: "error" as const } : {}),
         body: JSON.stringify({ model: expected, state, questions }),
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       });
@@ -1244,7 +1252,7 @@ export default function (pi: ExtensionAPI, overrides: Partial<Config> = {}) {
       }
       if (stage === "command") return row(label, `${home(command.argv.join(" "))}, ${classifierProcess ? "running" : "not running"} (${bands(stage, last)})`);
       const extra = Object.keys(classifier.extraQuestions);
-      const where = classifier.provider ? `${classifier.provider}/${classifier.model}, via Pi` : `${classifier.endpoint}, ${(await health(config, 500)) ? "up" : "down"}`;
+      const where = classifier.provider ? `${classifier.provider}/${classifier.model}, ${classifier.api === "decisions" ? "via Decisions API" : "via Pi"}` : `${classifier.endpoint}, ${(await health(config, 500)) ? "up" : "down"}`;
       return row(label, `${where} (${bands(stage, last)}${extra.length ? `, extra: ${extra.join(", ")}` : ""})`);
     };
     const { deny, ask, classify, allow } = rules.ui;

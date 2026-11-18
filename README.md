@@ -394,6 +394,32 @@ That works out to about 1.5 cents per 1,000 classified commands at the time of w
 
 Pin a version (`typesafe/jev-1.13`) and don't use `~typesafe/jev-latest`: a threshold tuned for one version shouldn't silently apply to the next. With that classifier in `bench/config.json`, `npm run bench -- --ask-above 0.5` runs the bench suites through Pi's registry, and works the same for the other decision models your providers offer.
 
+### Jev through Selectel AI Gateway
+
+Add a provider named `selectel-aig` to your Pi `models.json` with
+`baseUrl` set to `https://api.selectel.ru/aig/v1`. Use
+`pi auth login selectel-aig --api-key` to save the router key in Pi's credential store.
+
+In the extension config, select the Decisions route. The extension uses the provider's stored
+credential and sends typed questions to `<baseUrl>/decisions`.
+
+```json
+{
+  "decider": ["classifier", "llm"],
+  "classifier": {
+    "api": "decisions",
+    "provider": "selectel-aig",
+    "model": "typesafe/jev-1.14",
+    "askAbove": 0.5
+  },
+  "llm": {
+    "provider": "openai-codex",
+    "model": "gpt-6.2-astra",
+    "thinkingLevel": "high"
+  }
+}
+```
+
 ### Classifier questions
 
 You can reword the main question and add your own yes/no questions:

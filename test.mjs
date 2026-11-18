@@ -341,8 +341,14 @@ const { classify } = await import("./index.ts");
   check("x", { action: (await answer("wrong")) === "unauthorized" ? "x" : "bad" }, "provider: a refused key is an error");
   check("x", { action: /Pi has no classifier model nope\/lancet/.test(await answer("k1", { ...via, classifier: { ...via.classifier, provider: "nope" } })) ? "x" : "bad" }, "provider: an unknown provider is an error");
   check("x", { action: /expects "kev"/.test(await answer("k1", { ...via, classifier: { ...via.classifier, model: "kev" } })) ? "x" : "bad" }, "provider: the served model name is checked");
+  const decisions = { ...via, classifier: { ...via.classifier, api: "decisions" } };
+  check("x", { action: (await answer("k1", decisions)) === "0.4" && seen.url === "/v1/decisions" && seen.body.questions.risky.type === "noul" ? "x" : JSON.stringify(seen) }, "decisions: uses the authenticated Decisions route with typed questions");
+  const lastRequest = seen;
+  check("x", { action: /no API key/.test(await answer(undefined, decisions)) && seen === lastRequest ? "x" : "bad" }, "decisions: missing credentials prevent the request");
   server.close();
 }
+loads("decisions requires a provider", { classifier: { api: "decisions", model: "typesafe/jev-1.14" } }, true);
+loads("decisions with a provider", { classifier: { api: "decisions", provider: "selectel-aig", model: "typesafe/jev-1.14" } });
 // Provider mode: questions go through Pi's model registry. The registry here is a stand-in that
 // records the request; the real one is exercised by `npm run bench` with a provider set.
 const viaPi = { ...withExtra, classifier: { ...withExtra.classifier, provider: "openrouter", model: "typesafe/jev-1.13" } };
@@ -942,6 +948,16 @@ const stubRegistry = (replies, sent = []) => ({
 });
 const asst = (text, extra = {}) => ({ content: [{ type: "text", text }], stopReason: "stop", usage: { input: 100, cacheRead: 200, output: 5 }, ...extra });
 const llmConfig = (over = {}) => ({ ...DEFAULTS, decider: ["llm"], llm: { ...DEFAULT_LLM, provider: "stub", model: "m", timeoutMs: 5000, ...over } });
+{
+  const items = transcriptItems([], DEFAULT_LLM, { tool: "bash", input: { command: "x" } });
+  for (const provider of ["openai-codex", "stub"]) {
+    const sent = [];
+    await decideWithLlm(llmConfig({ provider }), items, undefined, stubRegistry([asst("<block>no</block>")], sent));
+    const options = sent[0]?.options;
+    const expected = provider === "openai-codex" ? undefined : 0;
+    check("x", { action: options && options.temperature === expected ? "x" : JSON.stringify(options) }, `llm: ${provider} temperature compatibility`);
+  }
+}
 const decided = async (want, label, replies, over) => {
   const sent = [];
   const d = await decideWithLlm(llmConfig(over), transcriptItems([{ message: { role: "user", content: "sync it" } }], DEFAULT_LLM, { tool: "bash", input: { command: "mytool sync" } }), undefined, stubRegistry(replies, sent));

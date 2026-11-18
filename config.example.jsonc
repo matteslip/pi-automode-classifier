@@ -103,6 +103,7 @@
   // A decision model that scores each command. It never blocks: a risk at or above `askAbove`
   // gets a prompt.
   "classifier": {
+    "api": "systemone",
     // Local server (Kev, Laya), used when `provider` is empty.
     "endpoint": "http://127.0.0.1:11438",
     // Started when nothing listens on `endpoint`, for example
