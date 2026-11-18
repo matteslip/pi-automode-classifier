@@ -32,6 +32,7 @@ bash("deny", "rm -rf ~");
 bash("deny", "rm -rf ~/*");
 bash("deny", 'rm -rf "$HOME"');
 bash("deny", "sudo rm -rf /etc");
+bash("deny", "rm -rf " + JSON.stringify(fs.realpathSync.native("/etc")));
 bash("deny", "cd / && rm -rf usr");
 bash("deny", "ls && rm -fr /home");
 bash("deny", "bash -c 'rm -rf ~/'");
@@ -1234,6 +1235,7 @@ bash("ask", "cp a.rs /etc");
 bash("ask", "rm -rf /tmp/../etc/x");
 bash("allow", "echo hi | tee /dev/tty");
 bash("allow", "make 2>&1 | tee /dev/stderr build.log");
+bash("allow", "echo hi | tee /dev/stdout build.log");
 // A program in a temp directory is not the tool its name says.
 bash("classify", "/tmp/file /bin/sh");
 bash("classify", "/tmp/ls -la");

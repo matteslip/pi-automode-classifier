@@ -229,7 +229,9 @@ function resolveWord(word: string, scope: Scope): string | undefined {
     if (!scope.cwd) return undefined;
     word = path.resolve(scope.cwd, word);
   }
-  return realish(path.normalize(word));
+  const normalized = path.normalize(word);
+  if (normalized === "/dev/stdout" || normalized === "/dev/stderr") return normalized;
+  return realish(normalized);
 }
 
 const isGuarded = (p: string | undefined, scope: Scope) => !!p && scope.guarded.some((g) => within(p, g));
@@ -245,7 +247,14 @@ const inTmp = (p: string) => TMP_DIRS.some((d) => within(p, d, true));
 const isLocal = (p: string | undefined, scope: Scope) =>
   !!p && ((!!scope.root && within(p, scope.root)) || inTmp(p) || scope.allowed.some((d) => within(p, d)));
 // /, a top-level directory, $HOME or a parent of it.
-export const isRootLike = (p: string) => p === "/" || path.dirname(p) === "/" || within(HOME, p);
+const systemAliases = new Set(
+  process.platform === "darwin"
+    ? fs.readdirSync("/", { withFileTypes: true })
+        .filter((entry) => entry.isSymbolicLink())
+        .map((entry) => realish(path.join("/", entry.name)))
+    : [],
+);
+export const isRootLike = (p: string) => p === "/" || path.dirname(p) === "/" || systemAliases.has(p) || within(HOME, p);
 const BARE_GLOB = /^(\*|\.\*|\.\[!\.\]\*|\{.*\})$/;
 
 // The folder a session permission for `p` would cover: the git checkout or worktree it is in,
