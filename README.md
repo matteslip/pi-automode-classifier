@@ -420,6 +420,17 @@ credential and sends typed questions to `<baseUrl>/decisions`.
 }
 ```
 
+### Using pi-permission-system for path policy
+
+With `@gotgenes/pi-permission-system` 42 installed as an npm Pi package, load this
+extension first and set `permissionSystem: true` in the extension config. In
+pi-permission-system, keep the Bash catch-all at `ask` and add
+`automode-classifier` to `authorizerChain`.
+
+The link accepts only matching Bash tool calls already allowed by this extension
+and only for the Bash catch-all. Explicit restrictions, path policy and asks
+without a matching decision remain with pi-permission-system.
+
 ### Classifier questions
 
 You can reword the main question and add your own yes/no questions:

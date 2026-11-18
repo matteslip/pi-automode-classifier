@@ -4,6 +4,7 @@
 {
   // Starting state of each session. `/automode-classifier on|off` changes it for that session.
   "enabled": true,
+  "permissionSystem": false,
   // Append every decision to ~/.local/state/pi-automode-classifier/decisions.jsonl.
   "log": true,
 

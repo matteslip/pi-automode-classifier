@@ -33,10 +33,11 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { bashVerdict, commitWrites, compileRules, fileVerdict, isRootLike, makeScope, readVerdict, within, type Action, type SessionFiles, type Verdict } from "./rules.ts";
 import { buildSystemPrompt, buildTranscript, denyMessage, mergeRules, parseVerdict, STAGE1_INSTRUCTION, stage2Instruction, DEFAULT_RULES, DEFAULT_LLM, type LlmConfig, type Outcome, type TranscriptItem } from "./automode.ts";
 
@@ -100,6 +101,7 @@ export interface ClassifierConfig {
 }
 
 export interface Config {
+  permissionSystem: boolean;
   // Starting state of a session. `/automode-classifier on|off` changes it for that session.
   enabled: boolean;
   // Append every decision to LOG_FILE.
@@ -136,6 +138,7 @@ export interface Config {
 }
 
 export const DEFAULTS: Config = {
+  permissionSystem: false,
   enabled: true,
   log: true,
   rules: { deny: [], ask: [], classify: [], allow: [] },
@@ -198,6 +201,7 @@ interface Schema {
   [key: string]: Check | Schema;
 }
 const SCHEMA: Schema = {
+  permissionSystem: isBool,
   enabled: isBool,
   log: isBool,
   rules: { deny: isStrings, ask: isStrings, classify: isStrings, allow: isStrings },
@@ -952,6 +956,53 @@ function log(config: Config, entry: Record<string, unknown>) {
   }
 }
 
+interface PermissionSystemRequest {
+  source: string;
+  toolName?: string;
+  toolCallId?: string;
+  forwarding?: unknown;
+  payload?: {
+    kind?: string;
+    request?: { value?: string; matchedPattern?: string | null };
+    evidence?: readonly { label: string; text: string }[];
+  };
+}
+
+function connectPermissionSystem(pi: ExtensionAPI, approvedBash: Map<string, string>) {
+  let dispose: (() => void) | undefined;
+  let generation = 0;
+  pi.events.on("permissions:ready", async (event) => {
+    const sessionId = (event as { sessionId?: string } | undefined)?.sessionId;
+    if (dispose || !sessionId) return;
+    const current = generation;
+    try {
+      const resolve = createRequire(path.join(AGENT_DIR, "npm/package.json")).resolve;
+      const entry = resolve("@gotgenes/pi-permission-system");
+      const { getPermissionsService } = await import(entry);
+      if (dispose || generation !== current) return;
+      const service = getPermissionsService(sessionId);
+      dispose = service?.registerAuthorizer("automode-classifier", async (request: PermissionSystemRequest) => {
+        const { source, toolName, toolCallId, forwarding, payload } = request;
+        if (source !== "tool_call" || toolName !== "bash" || !toolCallId || forwarding ||
+            payload?.kind !== "bash" || payload.request?.matchedPattern !== "*") return { kind: "defer" };
+        const command = payload.evidence?.find((item) => item.label === "full command")?.text ?? payload.request.value;
+        if (command === undefined || approvedBash.get(toolCallId) !== command.trim()) return { kind: "defer" };
+        approvedBash.delete(toolCallId);
+        return { kind: "allow" };
+      });
+    } catch {
+      return;
+    }
+  });
+  pi.on("tool_result", (event) => { approvedBash.delete(event.toolCallId); });
+  pi.on("session_shutdown", () => {
+    generation++;
+    dispose?.();
+    dispose = undefined;
+    approvedBash.clear();
+  });
+}
+
 // `overrides` is for test.mjs and bench/run.mjs; Pi calls this with one argument.
 export default function (pi: ExtensionAPI, overrides: Partial<Config> = {}) {
   const loaded = loadConfig();
@@ -1004,7 +1055,7 @@ export default function (pi: ExtensionAPI, overrides: Partial<Config> = {}) {
   });
   pi.on("session_shutdown", async () => stopClassifierProcess());
 
-  pi.on("tool_call", async (event, ctx) => {
+  const checkTool = async (event: ToolCallEvent, ctx: ExtensionContext) => {
     if (!enabled) return undefined;
     const input = event.input as Record<string, unknown>;
     const now = checkouts(ctx.cwd);
@@ -1230,7 +1281,17 @@ export default function (pi: ExtensionAPI, overrides: Partial<Config> = {}) {
     held("rejected-by-user");
     finish("block", "user");
     return { block: true, reason: `The user blocked this (${verdict.reason}). Do not retry it or work around it. Ask the user how to proceed.` };
+  };
+
+  const approvedBash = new Map<string, string>();
+  pi.on("tool_call", async (event, ctx) => {
+    const result = await checkTool(event, ctx);
+    if (config.permissionSystem && enabled && !result?.block && event.toolName === "bash" && typeof event.input.command === "string") {
+      approvedBash.set(event.toolCallId, event.input.command.trim());
+    }
+    return result;
   });
+  if (config.permissionSystem) connectPermissionSystem(pi, approvedBash);
 
   const statusText = async (ctx: ExtensionContext) => {
     const { llm, classifier, command } = config;
