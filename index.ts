@@ -33,7 +33,6 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -976,9 +975,11 @@ function connectPermissionSystem(pi: ExtensionAPI, approvedBash: Map<string, str
     if (dispose || !sessionId) return;
     const current = generation;
     try {
-      const resolve = createRequire(path.join(AGENT_DIR, "npm/package.json")).resolve;
-      const entry = resolve("@gotgenes/pi-permission-system");
-      const { getPermissionsService } = await import(entry);
+      const root = path.join(AGENT_DIR, "npm/node_modules/@gotgenes/pi-permission-system");
+      const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+      const entry = manifest.exports?.["."]?.default;
+      if (typeof entry !== "string" || !entry.startsWith("./")) return;
+      const { getPermissionsService } = await import(path.resolve(root, entry));
       if (dispose || generation !== current) return;
       const service = getPermissionsService(sessionId);
       dispose = service?.registerAuthorizer("automode-classifier", async (request: PermissionSystemRequest) => {
